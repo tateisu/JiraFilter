@@ -5,8 +5,8 @@ import kotlin.system.exitProcess
 /**
  * コマンドラインオプションの集合
  * - usage, parseOptions, showOptions などオプションの集合を扱う
- * - コード中でオプションを定義するとコンストラクタからリストに追加される
- * - kotlinx-cliと違って、オプション変数はコードから随時変更できる
+ * - オプション変数は移譲プロパティであり、コードから随時変更できる
+ * - provideDelegateを使ってオプション変数のプロパティ名を覚えて、byPropName()で参照できる。
  *
  * usage:
  * val options = Options()
@@ -29,12 +29,12 @@ import kotlin.system.exitProcess
  *     arg = "number",
  * )
  * // (2)コマンドライン引数を解釈する
- * val otherArgs = parseOptions(args)
+ * val otherArgs = options.parseOptions(args)
  *
  * // (3)オプションの値をまとめて表示する
- * println(dumpOptions())
+ * println(options.toString())
  *
- * // (4)解釈後、オプション変数は普通に読み書きできる
+ * // (4)解釈後、オプション変数は普通に読める。もしオプションをvarで定義したなら変更できる。
  * if (help) usage(null)
  * if (optStr.isEmpty()) usage("--str is empty.)
  */
@@ -59,7 +59,7 @@ class Options : ArrayList<OptionBase<*>>() {
             ?.name
             ?: "(???.jar)"
 
-        linePrinter("usage: java -jar $jarFile (options...)")
+        linePrinter("\nUsage:\n  java -jar $jarFile (options...)")
         linePrinter("\nOptions:")
         forEach { option ->
             val optionArg = when (val a = option.arg) {
@@ -68,7 +68,7 @@ class Options : ArrayList<OptionBase<*>>() {
             }
             when (option.names.size) {
                 1 -> linePrinter("  ${option.names.first()}$optionArg")
-                else -> linePrinter("  ( ${option.names.joinToString(" | ")} )$optionArg")
+                else -> linePrinter("  ${option.names.joinToString(" | ")}$optionArg")
             }
             linePrinter("    ${option.desc}")
             val defVal = option.defVal.toString()
@@ -117,27 +117,43 @@ class Options : ArrayList<OptionBase<*>>() {
      */
     override fun toString() = "options: " +
             map {
-                val k = it.names.first()
+                val k = it.prop?.name ?: it.names.first()
                 val v = it.data.toString()
                 Pair(k, v)
             }.sortedBy { it.first }
                 .joinToString(", ") { "${it.first}=[${it.second}]" }
 
+    /**
+     * プロパティ名からOptionオブジェクトを取得する
+     */
+    fun byPropName(name: String): OptionBase<*>? =
+        find { it.prop?.name == name }
+
+    private fun <T : OptionBase<*>> T.register(
+        thisRef: Any?,
+        prop: KProperty<*>,
+    ) = apply {
+        options.add(this)
+        this.thisRef = thisRef
+        this.prop = prop
+    }
+
     // 移譲プロパティを生成する
     fun boolean(
         names: List<String>,
         defVal: Boolean = false,
-        valueSet: Boolean = true,
+        valueIfSet: Boolean = true,
         arg: String? = null,
         desc: String,
-    ) = OptionBoolean(
-        options = this,
-        names = names,
-        defVal = defVal,
-        valueSet = valueSet,
-        arg = arg,
-        desc = desc,
-    )
+    ) = DelegateProviderOptionBoolean { thisRef, prop ->
+        OptionBoolean(
+            names = names,
+            defVal = defVal,
+            valueIfSet = valueIfSet,
+            arg = arg,
+            desc = desc,
+        ).register(thisRef, prop)
+    }
 
     // 移譲プロパティを生成する
     fun string(
@@ -145,13 +161,14 @@ class Options : ArrayList<OptionBase<*>>() {
         defVal: String = "",
         arg: String,
         desc: String,
-    ) = OptionString(
-        options = this,
-        names = names,
-        defVal = defVal,
-        arg = arg,
-        desc = desc,
-    )
+    ) = DelegateProviderOptionString { thisRef, prop ->
+        OptionString(
+            names = names,
+            defVal = defVal,
+            arg = arg,
+            desc = desc,
+        ).register(thisRef, prop)
+    }
 
     // 移譲プロパティを生成する
     fun int(
@@ -159,13 +176,14 @@ class Options : ArrayList<OptionBase<*>>() {
         defVal: Int,
         arg: String,
         desc: String,
-    ) = OptionInt(
-        options = this,
-        names = names,
-        defVal = defVal,
-        arg = arg,
-        desc = desc,
-    )
+    ) = DelegateProviderOptionInt { thisRef, prop ->
+        OptionInt(
+            names = names,
+            defVal = defVal,
+            arg = arg,
+            desc = desc,
+        ).register(thisRef, prop)
+    }
 }
 
 /**
@@ -174,11 +192,16 @@ class Options : ArrayList<OptionBase<*>>() {
  * - ヘルプ表示に必要なテキストやデフォルト値を保持する
  */
 abstract class OptionBase<T : Any>(
-    // オプションの集合
-    options: Options,
     // デフォルト値
+    // data の初期化のため、ベースクラスのコンストラクタ引数にする
     val defVal: T,
 ) {
+    // プロパティを持つ親
+    var thisRef: Any? = null
+
+    // プロパティ
+    var prop: KProperty<*>? = null
+
     // オプション引数の名前。 -h --help などを含むリスト
     abstract val names: List<String>
 
@@ -190,11 +213,6 @@ abstract class OptionBase<T : Any>(
 
     // 現在の値
     var data = defVal
-
-    init {
-        @Suppress("LeakingThis")
-        options.add(this)
-    }
 
     // 移譲プロパティの実装
     operator fun getValue(thisRef: Any?, property: KProperty<*>): T =
@@ -233,38 +251,51 @@ abstract class OptionBase<T : Any>(
             parseValue(nextArg())
         }
     }
+
+    fun name(separator: String = "|") = names.joinToString(separator)
 }
 
 // Boolean値を保持する移譲プロパティ
 class OptionBoolean(
-    options: Options,
     override val names: List<String>,
-    defVal: Boolean = false,
-    private val valueSet: Boolean = true,
-    override val arg: String? = null,
+    private val valueIfSet: Boolean,
+    override val arg: String?,
     override val desc: String,
-) : OptionBase<Boolean>(options, defVal) {
-    override fun flagValue() = valueSet
+    defVal: Boolean,
+) : OptionBase<Boolean>(defVal) {
+    override fun flagValue() = valueIfSet
 }
 
 // String値を保持する移譲プロパティ
 class OptionString(
-    options: Options,
     override val names: List<String>,
-    defVal: String = "",
     override val arg: String,
     override val desc: String,
-) : OptionBase<String>(options, defVal) {
+    defVal: String,
+) : OptionBase<String>(defVal) {
     override fun parseValue(src: String) = src
 }
 
 // Int値を保持する移譲プロパティ
 class OptionInt(
-    options: Options,
     override val names: List<String>,
-    defVal: Int,
     override val arg: String,
     override val desc: String,
-) : OptionBase<Int>(options, defVal) {
+    defVal: Int,
+) : OptionBase<Int>(defVal) {
     override fun parseValue(src: String) = src.toInt()
+}
+
+// https://youtrack.jetbrains.com/issue/KT-17440
+// provideDelegate はGenericsを使えないので、Delegate型ごとに定義する
+class DelegateProviderOptionBoolean(val creator: (Any?, KProperty<*>) -> OptionBoolean) {
+    operator fun provideDelegate(thisRef: Any?, prop: KProperty<*>) = creator(thisRef, prop)
+}
+
+class DelegateProviderOptionString(val creator: (Any?, KProperty<*>) -> OptionString) {
+    operator fun provideDelegate(thisRef: Any?, prop: KProperty<*>) = creator(thisRef, prop)
+}
+
+class DelegateProviderOptionInt(val creator: (Any?, KProperty<*>) -> OptionInt) {
+    operator fun provideDelegate(thisRef: Any?, prop: KProperty<*>) = creator(thisRef, prop)
 }

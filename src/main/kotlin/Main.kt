@@ -12,8 +12,9 @@ import util.LogTag
 import util.atZone
 import util.decodeJsonObject
 import util.encodeQuery
-import util.formatIso8601
+import util.formatTime2
 import util.parseIso8601
+import util.toTsvLine
 import util.zoneTokyo
 import java.io.File
 import java.io.FileDescriptor
@@ -39,29 +40,36 @@ val verbose by options.boolean(
 val optSecrets by options.string(
     names = listOf("-s", "--secret"),
     defVal = "secrets.json",
-    desc = "JSON file that contains server, user, apiToken.",
+    desc = "JSON file that contains server, user, apiToken. see also: secrets.json.sample .",
     arg = "jsonFile",
 )
 
 val optDays by options.int(
     names = listOf("-d", "--days"),
-    defVal = 40,
+    defVal = 20,
     desc = "Do not retrieve/display data older than the specified number of days",
-    arg = "number",
+    arg = "(number)",
 )
 
 val optUserName by options.string(
     names = listOf("-u", "--userName"),
     defVal = "",
     desc = "specify part of the displayName that related to Jira ticket",
-    arg = "'part of the displayName'",
+    arg = "john",
 )
 
 val optProject by options.string(
     names = listOf("-p", "--project"),
     defVal = "",
     desc = "comma-separated list of projects name/key to specified in JQL.",
-    arg = "'projects'",
+    arg = "project",
+)
+
+val optSubtaskParents by options.string(
+    names = listOf("--epic", "-s", "--optSubtaskParents"),
+    defVal = "",
+    desc = "comma-separated list of parents of sub task.",
+    arg = "issueIdOrKey",
 )
 
 /**
@@ -146,8 +154,53 @@ suspend fun HttpClient.listTickets() {
     val limitTime = ZonedDateTime.now(zoneTokyo)
         .truncatedTo(ChronoUnit.DAYS)
         .minusDays(optDays.toLong())
-    println("limitTime=${limitTime.formatIso8601()}")
-    println("c/r/a mean creator, reporter, assignee")
+
+    println("limitTime=${limitTime.formatTime2()}")
+
+    fun filterAndFormatIssue(item: JsonObject): Pair<ZonedDateTime, String?> {
+
+        val fields = item.jsonObject("fields")
+            ?: error("missing fields")
+
+        val time = fields.string("updated")
+            ?.parseIso8601()
+            ?.atZone(zoneTokyo)
+            ?: error("missing updated.")
+
+        val roles = listOf("creator", "reporter", "assignee")
+            .mapNotNull { key ->
+                fields.jsonObject(key)
+                    ?.string("displayName")
+                    ?.takeIf {
+                        // コマンドライン引数で指定される、ユーザのdisplayNameの一部にマッチすること
+                        it.contains(optUserName)
+                    }
+                    ?.let { Pair(key, it) }
+            }
+            .joinToString("/") { it.first.firstOrNull().toString() }
+
+        val line = if (roles.isEmpty()) {
+            null
+        } else {
+            // TSD-1859 など
+            val key = item.string("key") ?: error("missing key")
+
+            // チケットのタイトル
+            val summary = fields.string("summary")
+
+            // status
+            val status = fields.jsonObject("status")?.string("name")
+            listOf(
+                time.formatTime2(),
+                key,
+                status,
+                roles,
+                summary
+            ).toTsvLine()
+        }
+
+        return Pair(time, line)
+    }
 
     suspend fun loadMultiplePage(jql: String): List<String> {
         print("jql: $jql ")
@@ -156,14 +209,16 @@ suspend fun HttpClient.listTickets() {
         val step = 20
         var startAt: Int? = 0
         var issuesTotal = 0
+
         requestLoop@ while (startAt != null) {
+
             print(".")
 
             val root = apiRequest(
                 secrets = secrets,
                 path = "/rest/api/latest/search",
                 query = listOf(
-                    "orderBy" to "created-",
+                    "orderBy" to "updated-",
                     "startAt" to startAt,
                     "maxResults" to step,
                     "jql" to jql,
@@ -178,41 +233,11 @@ suspend fun HttpClient.listTickets() {
             issuesTotal += items.size
 
             for (item in items) {
-                val fields = item.jsonObject("fields")
-                    ?: error("missing fields")
-
-                val created = fields.string("created")
-                    ?.parseIso8601()
-                    ?.atZone(zoneTokyo)
-                    ?: error("missing created.")
+                val (time, line) = filterAndFormatIssue(item)
+                line?.let { result.add(it) }
 
                 // 期限より古いデータに遭遇したらループ脱出
-                if (created < limitTime) break@requestLoop
-
-                val roles = listOf("creator", "reporter", "assignee")
-                    .mapNotNull { key ->
-                        fields.jsonObject(key)
-                            ?.string("displayName")
-                            ?.takeIf {
-                                // コマンドライン引数で指定される、ユーザのdisplayNameの一部にマッチすること
-                                it.contains(optUserName)
-                            }
-                            ?.let { Pair(key, it) }
-                    }
-                    .joinToString("/") { it.first.firstOrNull().toString() }
-
-                if (roles.isEmpty()) continue
-
-                // TSD-1859 など
-                val key = item.string("key") ?: error("missing key")
-
-                // チケットのタイトル
-                val summary = fields.string("summary")
-
-                // status
-                val status = fields.jsonObject("status")?.string("name")
-
-                result.add("${created.formatIso8601()} $key [$status] $roles $summary")
+                if (time < limitTime) break@requestLoop
             }
 
             startAt = when {
@@ -226,22 +251,64 @@ suspend fun HttpClient.listTickets() {
         return result
     }
 
-    val projects = optProject.split(",")
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
+    suspend fun loadSubtask(parent: String): List<String> {
+        print("loadSubtask $parent ")
+        return apiRequest(
+            secrets = secrets,
+            path = "/rest/api/latest/issue/$parent"
+        ).decodeJsonObject()
+            .jsonObject("fields")
+            ?.jsonArray("subtasks")
+            ?.objectList()
+            ?.also {
+                print("(${it.size})")
+            }
+            ?.mapNotNull {
+                print(".")
+                val item = apiRequest(
+                    secrets = secrets,
+                    path = "/rest/api/latest/issue/${it.string("id")}",
+                ).decodeJsonObject()
+                val (time, line) = filterAndFormatIssue(item)
+                line
+            }.also {
+                print("\n")
+            }
+            ?: error("missing fields.subtasks in /rest/api/latest/issue/$parent")
+    }
 
     // project in(...) でも  project=... or  project=... でも
     // 複数プロジェクトを読めなかったので、プロジェクトごとに取得する
-    val list = projects.map { project ->
-        loadMultiplePage(
-            jql = "project=${project.quoteJql()}"
-        )
-    }
+    val listIssues = optProject.split(",")
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .map { project ->
+            loadMultiplePage(
+                jql = "project=${project.quoteJql()}"
+            )
+        }
         .flatten()
-        .sortedDescending()
 
-    for (it in list) {
-        println(it)
+    val listSubtask = optSubtaskParents.split(",")
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .map { parent ->
+            loadSubtask(parent)
+//            loadMultiplePage(
+//                jql = "parent=${parent.quoteJql()}"
+//            )
+        }
+        .flatten()
+
+    val list = listIssues + listSubtask
+
+    if (list.isEmpty()) {
+        log.w("empty result.")
+    } else {
+        println("# updated, ticket#, status, role(creator, reporter, assignee), title")
+        for (it in list.sorted()) {
+            println(it)
+        }
     }
 }
 
@@ -251,7 +318,7 @@ suspend fun HttpClient.listTickets() {
 suspend fun main(args: Array<String>) {
 
     log.v("file.encoding=${System.getProperty("file.encoding")}, LANG=${System.getenv("LANG")}")
-    if (System.getenv("LANG").contains("UTF-8", ignoreCase = true)) {
+    if (System.getenv("LANG")?.contains("UTF-8", ignoreCase = true) == true) {
         // 環境変数LANGがutf-8を含むなら標準入出力のエンコーディングを変更する
         log.v("force output encoding to UTF-8")
         fun FileDescriptor.printStreamUtf8() =
@@ -264,9 +331,18 @@ suspend fun main(args: Array<String>) {
     options.apply {
         parseOptions(args)
         if (help) usage(null)
-        if (optSecrets.isBlank()) usage("--secret is not set.")
-        if (optUserName.isBlank()) usage("--userName is not set.")
-        if (optProject.isBlank()) usage("--project is not set.")
+
+        arrayOf(
+            "optSecrets" to optSecrets,
+            "optUserName" to optUserName,
+        ).forEach { (propName, value) ->
+            val meta = options.byPropName(propName) ?: error("missing option propName=$propName")
+            if (value.isBlank()) {
+                usage("option is not set. ${meta.name()}")
+            }
+        }
+
+        LogTag.verbose = verbose
         log.v(toString())
     }
 

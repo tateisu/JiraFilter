@@ -2,10 +2,8 @@ package util
 
 import java.time.ZoneId
 import java.time.ZonedDateTime
-import java.time.chrono.IsoChronology
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeFormatterBuilder
-import java.time.format.ResolverStyle
 import java.time.temporal.ChronoField
 
 val reFalse = """\A(?:0\z|off|f)""".toRegex(RegexOption.IGNORE_CASE)
@@ -109,10 +107,20 @@ private val formatterIso8601OffsetDateTime = DateTimeFormatterBuilder()
     .parseStrict()
     .toFormatter()
 
+private val formatterTime2 = DateTimeFormatterBuilder()
+    .parseCaseInsensitive()
+    .parseCaseInsensitive()
+    .append(DateTimeFormatter.ISO_LOCAL_DATE)
+    .appendLiteral(' ')
+    .appendValue(ChronoField.HOUR_OF_DAY, 2)
+    .appendLiteral(':')
+    .appendValue(ChronoField.MINUTE_OF_HOUR, 2)
+    .toFormatter()
+
 fun ZonedDateTime.atZone(zone: ZoneId) = toInstant().atZone(zone)!!
 
-fun ZonedDateTime.formatIso8601(): String =
-    format(formatterIso8601OffsetDateTime)
+fun ZonedDateTime.formatTime2(): String =
+    format(formatterTime2)
 
 // ISO8601の時差オフセット表記 "+0900" を Java8 Timeが扱える形式 "+09:00" に正規化する
 private fun String.fixIso8601TimeOffset() =
@@ -126,3 +134,18 @@ fun String.parseIso8601(): ZonedDateTime =
         fixIso8601TimeOffset(),
         formatterIso8601OffsetDateTime,
     )
+
+val reTsvSpecial = """([\x0d\x0a]+|[\x00-\x20\x7f"])""".toRegex()
+fun List<Any?>.toTsvLine() = joinToString("\t") {
+    var hasSpecial = false
+    val col = reTsvSpecial.replace(it.toString()) { mr ->
+        hasSpecial = true
+        val t = mr.groupValues[1][0]
+        when (t) {
+            '\r', '\n' -> "\n"
+            '"' -> "\"\""
+            else -> " "
+        }
+    }
+    if (hasSpecial) "\"$col\"" else col
+}

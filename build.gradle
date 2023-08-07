@@ -23,7 +23,7 @@ dependencies {
     testImplementation "org.jetbrains.kotlin:kotlin-test"
 
     implementation "org.jetbrains.kotlin:kotlin-util-io:$kotlinVersion"
-    implementation "org.jetbrains.kotlin:kotlin-reflect:$kotlinVersion"
+    // implementation "org.jetbrains.kotlin:kotlin-reflect:$kotlinVersion"
 
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$kotlinxCoroutinesVersion"
 

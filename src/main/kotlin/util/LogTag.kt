@@ -36,7 +36,7 @@ class LogTag(private val tag: String) {
     }
 
     fun v(s: String) {
-        println("$nowStr V/$tag $s")
+        if(verbose) println("$nowStr V/$tag $s")
     }
 
     inline fun v(stringMaker: () -> String) {
