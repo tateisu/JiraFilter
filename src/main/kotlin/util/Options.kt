@@ -1,3 +1,5 @@
+package util
+
 import java.io.File
 import kotlin.reflect.KProperty
 import kotlin.system.exitProcess
@@ -133,7 +135,7 @@ class Options : ArrayList<OptionBase<*>>() {
         thisRef: Any?,
         prop: KProperty<*>,
     ) = apply {
-        options.add(this)
+        add(this)
         this.thisRef = thisRef
         this.prop = prop
     }

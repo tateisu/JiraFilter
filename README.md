@@ -1,18 +1,15 @@
 # JiraFilter
 JiraのREST APIを使って特定ユーザが関わった(creator/reporter/assigner)チケットを更新日順に列挙するスクリプト。
 
-# 行うこと
+----
+## 行うこと
 - `-p prj[,…]` で指定したJira Project を更新日順に列挙
 - `--epic parent[,…]` で指定したチケットのsubtaskを列挙
 - `-u name` で指定した名前(の一部)をcreator, reporter, assignee に含まないチケットを除外
 - 得られたチケットを更新日順にTSV形式で列挙する
 
-# ビルド手順
-```sh
-./deploy.sh && java -jar ./JiraFilter.jar -h -v
-```
-
-# JiraのAPIトークンの取得
+----
+## JiraのAPIトークンの取得
 - Jiraの右上のアカウント画像をタップ
 - 「アカウントを管理」をタップ
 - 認証をすませる
@@ -23,7 +20,7 @@ JiraのREST APIを使って特定ユーザが関わった(creator/reporter/assig
 - 新しいAPIトークンがHidden表示されるので、コピーする。
 - コピーした内容を適当にメモしておく
 
-# secrets.json の用意
+## secrets.json の用意
 ```
 cp secrets.json.sample secrets.json
 chmod 600 secrets.json
@@ -38,7 +35,14 @@ emacs secrets.json
 |user|Jiraログインユーザのメールアドレス|user@mail.address|
 |apiToken|上の章で取得したAPIトークン|******************|
 
-# 起動
+----
+## ビルド手順
+```sh
+./deploy.sh && java -jar ./JiraFilter.jar -h -v
+```
+
+----
+## 起動
 ```
 Usage:
   java -jar JiraFilter.jar [options…]
