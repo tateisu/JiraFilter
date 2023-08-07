@@ -217,16 +217,19 @@ class Options : ArrayList<OptionBase<*>>() {
         var i = 0
         while (i < end) {
             val a = args[i++]
-            if (a == "--") {
-                otherArgs.addAll(args.slice(i..<end))
-                break
-            } else if (a[0] == '-') {
-                (nameMap[a] ?: error("missing option $a")).updateValue {
-                    args.elementAtOrNull(i++)
-                        ?: usage("option $a : missing option argument.")
+            when {
+                a == "--" -> {
+                    otherArgs.addAll(args.slice(i..<end))
+                    break
                 }
-            } else {
-                otherArgs.add(a)
+
+                a[0] == '-' -> (nameMap[a] ?: error("missing option $a"))
+                    .updateValue {
+                        args.elementAtOrNull(i++)
+                            ?: usage("option $a : missing option argument.")
+                    }
+
+                else -> otherArgs.add(a)
             }
         }
         return otherArgs
