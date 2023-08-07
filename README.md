@@ -1,8 +1,13 @@
 # JiraFilter
 JiraのREST APIを使って特定ユーザが関わった(creator/reporter/assigner)チケットを更新日順に列挙するスクリプト。
 
+# 行うこと
+- `-p prj[,…]` で指定したJira Project を更新日順に列挙
+- `--epic parent[,…]` で指定したチケットのsubtaskを列挙
+- `-u name` で指定した名前(の一部)を含まないチケットを除外
+- 得られたチケットを更新日順にTSV形式で列挙する
+
 # ビルド手順
-please try 
 ```sh
 ./deploy.sh && java -jar ./JiraFilter.jar -h -v
 ```
@@ -32,7 +37,6 @@ emacs secrets.json
 |server|対象組織のサーバ名|example.atlassian.net|
 |user|Jiraログインユーザのメールアドレス|user@mail.address|
 |apiToken|上の章で取得したAPIトークン|******************|
-
 
 # 起動
 ```
