@@ -5,194 +5,6 @@ import kotlin.reflect.KProperty
 import kotlin.system.exitProcess
 
 /**
- * コマンドラインオプションの集合
- * - usage, parseOptions, showOptions などオプションの集合を扱う
- * - オプション変数は移譲プロパティとして働く。随時コードから変更できる。
- * - provideDelegateを使ってオプション変数のプロパティ名を覚えて、byPropName()で参照できる。
- *
- * usage:
- *
- * // (1) options変数を用意する。
- * val options = Options()
- *
- * // (2)オプション変数を移譲プロパティで定義する
- * val help by options.boolean(
- *     names = listOf("-h", "--help"),
- *     desc = "show this help.",
- * )
- * val optStr by options.string(
- *     names = listOf("-s", "--str"),
- *     defVal = "(default value)",
- *     desc = "option description",
- *     arg = "string",
- * )
- * val optInt by options.int(
- *     names = listOf("-d", "--days"),
- *     defVal = 40,
- *     desc = "option description",
- *     arg = "number",
- * )
- *
- * // (3)コマンドライン引数を渡してオプションを解析する。
- * val otherArgs = options.parseOptions(args)
- *
- * // (4)解釈後、オプション変数は普通に読める。もしオプションをvarで定義したなら変更できる。
- * if (help) usage(null)
- * if (optStr.isEmpty()) usage("--str is empty.)
- *
- * // (5)オプションの値をまとめて表示する
- * println(options.toString())
- *
- */
-class Options : ArrayList<OptionBase<*>>() {
-
-    /**
-     * usageを表示してアプリを終了する
-     */
-    fun usage(
-        error: String?,
-        linePrinter: (String) -> Unit = { println(it) },
-    ): Nothing {
-
-        val jarFile = OptionBase::class.java
-            .protectionDomain
-            .codeSource
-            .location
-            .toURI()
-            .path
-            .let { File(it) }
-            .takeIf { it.isFile }
-            ?.name
-            ?: "(???.jar)"
-
-        linePrinter("\nUsage:\n  java -jar $jarFile [options…]")
-        linePrinter("\nOptions:")
-        forEach { option ->
-            val optionArg = when (val a = option.arg) {
-                null -> ""
-                else -> " $a"
-            }
-            when (option.names.size) {
-                1 -> linePrinter("  ${option.names.first()}$optionArg")
-                else -> linePrinter("  ${option.names.joinToString(" | ")}$optionArg")
-            }
-            linePrinter("    ${option.desc}")
-            val defVal = option.defVal.toString()
-            if (defVal.isNotEmpty()) {
-                linePrinter("    default value is $defVal")
-            }
-        }
-        if (error != null) {
-            linePrinter("\nError: $error")
-        }
-        exitProcess(1)
-    }
-
-    /**
-     * 引数リストからオプションを解釈する
-     * @return オプションではない引数のリスト
-     */
-    fun parseOptions(args: Array<String>): List<String> {
-        // オプション引数名とOptionBase<*>のマップ
-        val nameMap = map { option -> option.names.map { it to option } }
-            .flatten()
-            .toMap()
-
-        val otherArgs = ArrayList<String>()
-        val end = args.size
-        var i = 0
-        while (i < end) {
-            val a = args[i++]
-            if (a == "--") {
-                otherArgs.addAll(args.slice(i until end))
-                break
-            } else if (a[0] == '-') {
-                (nameMap[a] ?: error("missing option $a")).updateValue {
-                    args.elementAtOrNull(i++)
-                        ?: usage("option $a : missing option argument.")
-                }
-            } else {
-                otherArgs.add(a)
-            }
-        }
-        return otherArgs
-    }
-
-    /**
-     * オプションの値をまとめて文字列化
-     */
-    override fun toString() = "options: " +
-            map {
-                val k = it.prop?.name ?: it.names.first()
-                val v = it.data.toString()
-                Pair(k, v)
-            }.sortedBy { it.first }
-                .joinToString(", ") { "${it.first}=[${it.second}]" }
-
-    /**
-     * プロパティ名からOptionオブジェクトを取得する
-     */
-    fun byPropName(name: String): OptionBase<*>? =
-        find { it.prop?.name == name }
-
-    private fun <T : OptionBase<*>> T.register(
-        thisRef: Any?,
-        prop: KProperty<*>,
-    ) = apply {
-        add(this)
-        this.thisRef = thisRef
-        this.prop = prop
-    }
-
-    // 移譲プロパティを生成する
-    fun boolean(
-        names: List<String>,
-        defVal: Boolean = false,
-        valueIfSet: Boolean = true,
-        arg: String? = null,
-        desc: String,
-    ) = DelegateProviderOptionBoolean { thisRef, prop ->
-        OptionBoolean(
-            names = names,
-            defVal = defVal,
-            valueIfSet = valueIfSet,
-            arg = arg,
-            desc = desc,
-        ).register(thisRef, prop)
-    }
-
-    // 移譲プロパティを生成する
-    fun string(
-        names: List<String>,
-        defVal: String = "",
-        arg: String,
-        desc: String,
-    ) = DelegateProviderOptionString { thisRef, prop ->
-        OptionString(
-            names = names,
-            defVal = defVal,
-            arg = arg,
-            desc = desc,
-        ).register(thisRef, prop)
-    }
-
-    // 移譲プロパティを生成する
-    fun int(
-        names: List<String>,
-        defVal: Int,
-        arg: String,
-        desc: String,
-    ) = DelegateProviderOptionInt { thisRef, prop ->
-        OptionInt(
-            names = names,
-            defVal = defVal,
-            arg = arg,
-            desc = desc,
-        ).register(thisRef, prop)
-    }
-}
-
-/**
  * オプションのベースクラス
  * - 移譲プロパティとして動作する
  * - ヘルプ表示に必要なテキストやデフォルト値を保持する
@@ -304,4 +116,192 @@ class DelegateProviderOptionString(val creator: (Any?, KProperty<*>) -> OptionSt
 
 class DelegateProviderOptionInt(val creator: (Any?, KProperty<*>) -> OptionInt) {
     operator fun provideDelegate(thisRef: Any?, prop: KProperty<*>) = creator(thisRef, prop)
+}
+
+/**
+ * コマンドラインオプションの集合
+ * - usage, parseOptions, showOptions などオプションの集合を扱う
+ * - オプション変数は移譲プロパティとして働く。随時コードから変更できる。
+ * - provideDelegateを使ってオプション変数のプロパティ名を覚えて、byPropName()で参照できる。
+ *
+ * usage:
+ *
+ * // (1) options変数を用意する。
+ * val options = Options()
+ *
+ * // (2)オプション変数を移譲プロパティで定義する
+ * val help by options.boolean(
+ *     names = listOf("-h", "--help"),
+ *     desc = "show this help.",
+ * )
+ * val optStr by options.string(
+ *     names = listOf("-s", "--str"),
+ *     defVal = "(default value)",
+ *     desc = "option description",
+ *     arg = "string",
+ * )
+ * val optInt by options.int(
+ *     names = listOf("-d", "--days"),
+ *     defVal = 40,
+ *     desc = "option description",
+ *     arg = "number",
+ * )
+ *
+ * // (3)コマンドライン引数を渡してオプションを解析する。
+ * val otherArgs = options.parseOptions(args)
+ *
+ * // (4)解釈後、オプション変数は普通に読める。もしオプションをvarで定義したなら変更できる。
+ * if (help) usage(null)
+ * if (optStr.isEmpty()) usage("--str is empty.)
+ *
+ * // (5)オプションの値をまとめて表示する
+ * println(options.toString())
+ *
+ */
+class Options : ArrayList<OptionBase<*>>() {
+
+    /**
+     * usageを表示してアプリを終了する
+     */
+    fun usage(
+        error: String?,
+        linePrinter: (String) -> Unit = { println(it) },
+    ): Nothing {
+
+        val jarFile = OptionBase::class.java
+            .protectionDomain
+            .codeSource
+            .location
+            .toURI()
+            .path
+            .let { File(it) }
+            .takeIf { it.isFile }
+            ?.name
+            ?: "(???.jar)"
+
+        linePrinter("\nUsage:\n  java -jar $jarFile [options…]")
+        linePrinter("\nOptions:")
+        forEach { option ->
+            val optionArg = when (val a = option.arg) {
+                null -> ""
+                else -> " $a"
+            }
+            when (option.names.size) {
+                1 -> linePrinter("  ${option.names.first()}$optionArg")
+                else -> linePrinter("  ${option.names.joinToString(" | ")}$optionArg")
+            }
+            linePrinter("    ${option.desc}")
+            val defVal = option.defVal.toString()
+            if (defVal.isNotEmpty()) {
+                linePrinter("    default value is $defVal")
+            }
+        }
+        if (error != null) {
+            linePrinter("\nError: $error")
+        }
+        exitProcess(1)
+    }
+
+    /**
+     * 引数リストからオプションを解釈する
+     * @return オプションではない引数のリスト
+     */
+    fun parseOptions(args: Array<String>): List<String> {
+        // オプション引数名とOptionBase<*>のマップ
+        val nameMap = map { option -> option.names.map { it to option } }
+            .flatten()
+            .toMap()
+
+        val otherArgs = ArrayList<String>()
+        val end = args.size
+        var i = 0
+        while (i < end) {
+            val a = args[i++]
+            if (a == "--") {
+                otherArgs.addAll(args.slice(i..<end))
+                break
+            } else if (a[0] == '-') {
+                (nameMap[a] ?: error("missing option $a")).updateValue {
+                    args.elementAtOrNull(i++)
+                        ?: usage("option $a : missing option argument.")
+                }
+            } else {
+                otherArgs.add(a)
+            }
+        }
+        return otherArgs
+    }
+
+    /**
+     * オプションの値をまとめて文字列化
+     */
+    override fun toString() = "options: " +
+            map {
+                val k = it.prop?.name ?: it.names.first()
+                val v = it.data.toString()
+                Pair(k, v)
+            }.sortedBy { it.first }
+                .joinToString(", ") { "${it.first}=[${it.second}]" }
+
+    /**
+     * プロパティ名からOptionオブジェクトを取得する
+     */
+    fun byPropName(name: String): OptionBase<*>? =
+        find { it.prop?.name == name }
+
+    private fun <T : OptionBase<*>> T.register(
+        thisRef: Any?,
+        prop: KProperty<*>,
+    ) = apply {
+        add(this)
+        this.thisRef = thisRef
+        this.prop = prop
+    }
+
+    // 移譲プロパティを生成する
+    fun boolean(
+        names: List<String>,
+        defVal: Boolean = false,
+        valueIfSet: Boolean = true,
+        arg: String? = null,
+        desc: String,
+    ) = DelegateProviderOptionBoolean { thisRef, prop ->
+        OptionBoolean(
+            names = names,
+            defVal = defVal,
+            valueIfSet = valueIfSet,
+            arg = arg,
+            desc = desc,
+        ).register(thisRef, prop)
+    }
+
+    // 移譲プロパティを生成する
+    fun string(
+        names: List<String>,
+        defVal: String = "",
+        arg: String,
+        desc: String,
+    ) = DelegateProviderOptionString { thisRef, prop ->
+        OptionString(
+            names = names,
+            defVal = defVal,
+            arg = arg,
+            desc = desc,
+        ).register(thisRef, prop)
+    }
+
+    // 移譲プロパティを生成する
+    fun int(
+        names: List<String>,
+        defVal: Int,
+        arg: String,
+        desc: String,
+    ) = DelegateProviderOptionInt { thisRef, prop ->
+        OptionInt(
+            names = names,
+            defVal = defVal,
+            arg = arg,
+            desc = desc,
+        ).register(thisRef, prop)
+    }
 }
