@@ -22,7 +22,7 @@ please try
 ```
 cp secrets.json.sample secrets.json
 chmod 600 secrets.json
-emacs  secrets.json
+emacs secrets.json
 ```
 
 以下の項目を書き換えること：
