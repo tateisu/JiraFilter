@@ -7,13 +7,15 @@ import kotlin.system.exitProcess
 /**
  * コマンドラインオプションの集合
  * - usage, parseOptions, showOptions などオプションの集合を扱う
- * - オプション変数は移譲プロパティであり、コードから随時変更できる
+ * - オプション変数は移譲プロパティとして働く。随時コードから変更できる。
  * - provideDelegateを使ってオプション変数のプロパティ名を覚えて、byPropName()で参照できる。
  *
  * usage:
+ *
+ * // (1) options変数を用意する。
  * val options = Options()
  *
- * // (1)オプション変数を移譲プロパティで定義する
+ * // (2)オプション変数を移譲プロパティで定義する
  * val help by options.boolean(
  *     names = listOf("-h", "--help"),
  *     desc = "show this help.",
@@ -30,15 +32,17 @@ import kotlin.system.exitProcess
  *     desc = "option description",
  *     arg = "number",
  * )
- * // (2)コマンドライン引数を解釈する
- * val otherArgs = options.parseOptions(args)
  *
- * // (3)オプションの値をまとめて表示する
- * println(options.toString())
+ * // (3)コマンドライン引数を渡してオプションを解析する。
+ * val otherArgs = options.parseOptions(args)
  *
  * // (4)解釈後、オプション変数は普通に読める。もしオプションをvarで定義したなら変更できる。
  * if (help) usage(null)
  * if (optStr.isEmpty()) usage("--str is empty.)
+ *
+ * // (5)オプションの値をまとめて表示する
+ * println(options.toString())
+ *
  */
 class Options : ArrayList<OptionBase<*>>() {
 
