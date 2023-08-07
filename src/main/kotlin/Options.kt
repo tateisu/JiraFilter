@@ -59,7 +59,7 @@ class Options : ArrayList<OptionBase<*>>() {
             ?.name
             ?: "(???.jar)"
 
-        linePrinter("\nUsage:\n  java -jar $jarFile (options...)")
+        linePrinter("\nUsage:\n  java -jar $jarFile [options…]")
         linePrinter("\nOptions:")
         forEach { option ->
             val optionArg = when (val a = option.arg) {

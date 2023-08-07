@@ -54,22 +54,22 @@ val optDays by options.int(
 val optUserName by options.string(
     names = listOf("-u", "--userName"),
     defVal = "",
-    desc = "specify part of the displayName that related to Jira ticket",
-    arg = "john",
+    desc = "specify part of the displayName that related to user of ticket",
+    arg = "name",
 )
 
 val optProject by options.string(
     names = listOf("-p", "--project"),
     defVal = "",
     desc = "comma-separated list of projects name/key to specified in JQL.",
-    arg = "project",
+    arg = "project[,…]",
 )
 
 val optSubtaskParents by options.string(
     names = listOf("--epic", "-s", "--optSubtaskParents"),
     defVal = "",
-    desc = "comma-separated list of parents of sub task.",
-    arg = "issueIdOrKey",
+    desc = "comma-separated list of parent of subtask.",
+    arg = "issueIdOrKey[,…]",
 )
 
 /**
@@ -316,20 +316,21 @@ suspend fun HttpClient.listTickets() {
  * main
  */
 suspend fun main(args: Array<String>) {
-
-    log.v("file.encoding=${System.getProperty("file.encoding")}, LANG=${System.getenv("LANG")}")
-    if (System.getenv("LANG")?.contains("UTF-8", ignoreCase = true) == true) {
-        // 環境変数LANGがutf-8を含むなら標準入出力のエンコーディングを変更する
-        log.v("force output encoding to UTF-8")
-        fun FileDescriptor.printStreamUtf8() =
-            PrintStream(FileOutputStream(this), true, "UTF-8")
-        System.setOut(FileDescriptor.out.printStreamUtf8())
-        System.setErr(FileDescriptor.err.printStreamUtf8())
-    }
-
     // オプション解析
     options.apply {
         parseOptions(args)
+        LogTag.verbose = verbose
+
+        log.v("file.encoding=${System.getProperty("file.encoding")}, LANG=${System.getenv("LANG")}")
+        if (System.getenv("LANG")?.contains("UTF-8", ignoreCase = true) == true) {
+            // 環境変数LANGがutf-8を含むなら標準入出力のエンコーディングを変更する
+            log.v("force output encoding to UTF-8")
+            fun FileDescriptor.printStreamUtf8() =
+                PrintStream(FileOutputStream(this), true, "UTF-8")
+            System.setOut(FileDescriptor.out.printStreamUtf8())
+            System.setErr(FileDescriptor.err.printStreamUtf8())
+        }
+
         if (help) usage(null)
 
         arrayOf(
@@ -342,7 +343,7 @@ suspend fun main(args: Array<String>) {
             }
         }
 
-        LogTag.verbose = verbose
+
         log.v(toString())
     }
 

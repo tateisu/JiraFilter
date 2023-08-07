@@ -42,6 +42,5 @@ bin/
 .DS_Store
 
 #########################################
-JiraSearch*.jar
+Jira*.jar
 secrets.json
-
