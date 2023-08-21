@@ -23,6 +23,7 @@ import java.io.FileOutputStream
 import java.io.PrintStream
 import java.time.ZonedDateTime
 import java.time.temporal.ChronoUnit
+import java.util.*
 
 private val log = LogTag("Main")
 
@@ -183,11 +184,20 @@ suspend fun HttpClient.listTickets() {
         val line = if (roles.isEmpty()) {
             null
         } else {
+
             // TSD-1859 など
             val key = item.string("key") ?: error("missing key")
 
             // チケットのタイトル
-            val summary = fields.string("summary")
+            // 親チケットも読む
+            val summaries = LinkedList<String>()
+            var node: JsonObject? = fields
+            while (node != null) {
+                val summary = node.string("summary") ?: break
+                summaries.addFirst(summary)
+                node = node.jsonObject("parent")?.jsonObject("fields")
+            }
+            val summary = summaries.joinToString(" / ")
 
             // status
             val status = fields.jsonObject("status")?.string("name")
@@ -270,7 +280,7 @@ suspend fun HttpClient.listTickets() {
                     secrets = secrets,
                     path = "/rest/api/latest/issue/${it.string("id")}",
                 ).decodeJsonObject()
-                val (time, line) = filterAndFormatIssue(item)
+                val (_, line) = filterAndFormatIssue(item)
                 line
             }.also {
                 print("\n")
