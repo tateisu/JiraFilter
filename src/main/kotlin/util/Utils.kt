@@ -8,6 +8,14 @@ import java.time.temporal.ChronoField
 
 val reFalse = """\A(?:0\z|off|f)""".toRegex(RegexOption.IGNORE_CASE)
 
+fun Int?.notZero() = if (this != null && this != 0) this else null
+
+fun <T : Any?> List<T>?.notEmpty() = if (this.isNullOrEmpty()) null else this
+fun <T : Any?> Array<T>?.notEmpty() = if (this.isNullOrEmpty()) null else this
+fun <T : Any?> Collection<T>?.notEmpty() = if (this.isNullOrEmpty()) null else this
+fun <T : CharSequence?> T.notEmpty() = if (this.isNullOrEmpty()) null else this
+fun <T : CharSequence?> T.notBlank() = if (this.isNullOrBlank()) null else this
+
 fun CharSequence.eachCodePoint(block: (Int) -> Unit) {
     val end = length
     var i = 0

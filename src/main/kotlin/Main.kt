@@ -14,6 +14,8 @@ import util.atZone
 import util.decodeJsonObject
 import util.encodeQuery
 import util.formatTime2
+import util.notEmpty
+import util.notZero
 import util.parseIso8601
 import util.toTsvLine
 import util.zoneTokyo
@@ -127,6 +129,21 @@ fun String.quoteJql(): String {
     return "\"$escaped\""
 }
 
+class Ticket(
+    val json: JsonObject,
+    val time: ZonedDateTime,
+    val key: String,
+    val otherCols: Array<String?>,
+) : Comparable<Ticket> {
+    val line = listOf(time.formatTime2(), key, *otherCols).toTsvLine()
+
+    override fun toString() = line
+    override fun compareTo(other: Ticket) =
+        time.compareTo(other.time)
+            .notZero() ?: key.compareTo(other.key)
+            .notZero() ?: line.compareTo(other.line)
+}
+
 /**
  * Jiraのチケットを作成日降順で一定数読み、適当な条件でフィルタして表示する
  */
@@ -159,7 +176,7 @@ suspend fun HttpClient.listTickets() {
 
     println("limitTime=${limitTime.formatTime2()}")
 
-    fun filterAndFormatIssue(item: JsonObject): Pair<ZonedDateTime, String?> {
+    fun filterAndFormatIssue(item: JsonObject): Pair<ZonedDateTime, Ticket?> {
 
         val fields = item.jsonObject("fields")
             ?: error("missing fields")
@@ -184,7 +201,6 @@ suspend fun HttpClient.listTickets() {
         val line = if (roles.isEmpty()) {
             null
         } else {
-
             // TSD-1859 など
             val key = item.string("key") ?: error("missing key")
 
@@ -201,29 +217,33 @@ suspend fun HttpClient.listTickets() {
 
             // status
             val status = fields.jsonObject("status")?.string("name")
-            listOf(
-                time.formatTime2(),
-                key,
-                status,
-                roles,
-                summary
-            ).toTsvLine()
+            Ticket(
+                json = item,
+                time = time,
+                key = key,
+                otherCols = arrayOf(
+                    status,
+                    roles,
+                    summary
+                )
+            )
         }
 
         return Pair(time, line)
     }
 
-    suspend fun loadMultiplePage(jql: String): List<String> {
-        print("jql: $jql ")
+    suspend fun loadMultiplePage(
+        jql: String,
+        exitByItemUpdated: Boolean = true,
+    ): List<Ticket> {
+        print("loadMultiplePage: $jql ")
 
-        val result = ArrayList<String>()
+        val result = ArrayList<Ticket>()
         val step = 20
         var startAt: Int? = 0
         var issuesTotal = 0
 
         requestLoop@ while (startAt != null) {
-
-            print(".")
 
             val root = apiRequest(
                 secrets = secrets,
@@ -240,15 +260,18 @@ suspend fun HttpClient.listTickets() {
             val items = (root.jsonArray("issues")
                 ?.objectList()
                 ?: error("missing issues array."))
+            if (items.isEmpty()) {
+                break@requestLoop
+            }
 
             issuesTotal += items.size
-
+            print("${items.size},")
             for (item in items) {
-                val (time, line) = filterAndFormatIssue(item)
-                line?.let { result.add(it) }
+                val (time, ticket) = filterAndFormatIssue(item)
+                ticket?.let { result.add(ticket) }
 
                 // 期限より古いデータに遭遇したらループ脱出
-                if (time < limitTime) break@requestLoop
+                if (exitByItemUpdated && time < limitTime) break@requestLoop
             }
 
             startAt = when {
@@ -262,17 +285,18 @@ suspend fun HttpClient.listTickets() {
         return result
     }
 
-    suspend fun loadSubtask(parent: String): List<String> {
+    suspend fun loadSubtask(parent: String): List<Ticket> {
         print("loadSubtask $parent ")
-        return apiRequest(
+        val jsonRoot = apiRequest(
             secrets = secrets,
             path = "/rest/api/latest/issue/$parent"
         ).decodeJsonObject()
+        return jsonRoot
             .jsonObject("fields")
             ?.jsonArray("subtasks")
             ?.objectList()
             ?.also {
-                print("(${it.size})")
+                print("${it.size},")
             }
             ?.mapNotNull {
                 print(".")
@@ -295,7 +319,7 @@ suspend fun HttpClient.listTickets() {
         .filter { it.isNotBlank() }
         .map { project ->
             loadMultiplePage(
-                jql = "project=${project.quoteJql()}"
+                jql = "project=${project.quoteJql()}",
             )
         }
         .flatten()
@@ -304,22 +328,19 @@ suspend fun HttpClient.listTickets() {
         .map { it.trim() }
         .filter { it.isNotBlank() }
         .map { parent ->
-            loadSubtask(parent)
-//            loadMultiplePage(
-//                jql = "parent=${parent.quoteJql()}"
-//            )
-        }
-        .flatten()
+            loadSubtask(parent).notEmpty() ?: loadMultiplePage(
+                jql = "parent=${parent.quoteJql()}",
+                exitByItemUpdated = false,
+            )
+        }.flatten()
 
-    val list = listIssues + listSubtask
+    val list = (listIssues + listSubtask).sorted().distinctBy { it.key }
 
     if (list.isEmpty()) {
         log.w("empty result.")
     } else {
         println("# updated, ticket#, status, role(creator, reporter, assignee), title")
-        for (it in list.sorted()) {
-            println(it)
-        }
+        list.forEach { println(it) }
     }
 }
 
