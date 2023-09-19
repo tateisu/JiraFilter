@@ -8,7 +8,7 @@ import java.time.temporal.ChronoField
 
 val reFalse = """\A(?:0\z|off|f)""".toRegex(RegexOption.IGNORE_CASE)
 
-fun Int?.notZero() = if (this != null && this != 0) this else null
+fun Int?.notZero() = if (this == null || this == 0) null else this
 
 fun <T : Any?> List<T>?.notEmpty() = if (this.isNullOrEmpty()) null else this
 fun <T : Any?> Array<T>?.notEmpty() = if (this.isNullOrEmpty()) null else this

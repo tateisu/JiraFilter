@@ -234,9 +234,8 @@ suspend fun HttpClient.listTickets() {
 
     suspend fun loadMultiplePage(
         jql: String,
-        exitByItemUpdated: Boolean = true,
     ): List<Ticket> {
-        print("loadMultiplePage: $jql ")
+        log.i("loadMultiplePage: $jql")
 
         val result = ArrayList<Ticket>()
         val step = 20
@@ -247,12 +246,12 @@ suspend fun HttpClient.listTickets() {
 
             val root = apiRequest(
                 secrets = secrets,
-                path = "/rest/api/latest/search",
+                path = "/rest/api/3/search",
                 query = listOf(
-                    "orderBy" to "updated-",
+                    "orderBy" to "updated desc",
                     "startAt" to startAt,
                     "maxResults" to step,
-                    "jql" to jql,
+                    "jql" to jql + "order by updated desc",
                     // "fields" to "name,summary,description,assignee",
                 )
             ).decodeJsonObject()
@@ -265,23 +264,24 @@ suspend fun HttpClient.listTickets() {
             }
 
             issuesTotal += items.size
-            print("${items.size},")
-            for (item in items) {
-                val (time, ticket) = filterAndFormatIssue(item)
-                ticket?.let { result.add(ticket) }
-
-                // 期限より古いデータに遭遇したらループ脱出
-                if (exitByItemUpdated && time < limitTime) break@requestLoop
+            val a = items.mapNotNull {
+                val (_, ticket) = filterAndFormatIssue(it)
+                ticket
             }
+            if (a.isNotEmpty()) {
+                val timeMin = a.minOfOrNull { it.time }
+                val timeMax = a.maxOfOrNull { it.time }
+                log.i("items size=${a.size} tMin=$timeMin tMax=$timeMax")
+            }
+            result.addAll(a)
 
             startAt = when {
+                a.none { it.time >= limitTime } -> null
                 root.boolean("isLastPage") == true -> null
                 else -> startAt + items.size
             }
         }
-        if (issuesTotal == 0) print(" returns 0 issues.")
-        print("\n")
-
+        if (issuesTotal == 0) log.w("… returns 0 issues.")
         return result
     }
 
@@ -330,7 +330,6 @@ suspend fun HttpClient.listTickets() {
         .map { parent ->
             loadSubtask(parent).notEmpty() ?: loadMultiplePage(
                 jql = "parent=${parent.quoteJql()}",
-                exitByItemUpdated = false,
             )
         }.flatten()
 
@@ -374,7 +373,6 @@ suspend fun main(args: Array<String>) {
                 usage("option is not set. ${meta.name()}")
             }
         }
-
 
         log.v(toString())
     }
