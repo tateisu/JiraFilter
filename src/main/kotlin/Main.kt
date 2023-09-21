@@ -272,12 +272,19 @@ suspend fun HttpClient.listTickets() {
                 val timeMin = a.minOfOrNull { it.time }
                 val timeMax = a.maxOfOrNull { it.time }
                 log.i("items size=${a.size} tMin=$timeMin tMax=$timeMax")
+                result.addAll(a)
+
+                if(a.any { it.time < limitTime } ){
+                    log.i("old limit exceeded.")
+                    break
+                }
             }
-            result.addAll(a)
 
             startAt = when {
-                a.none { it.time >= limitTime } -> null
-                root.boolean("isLastPage") == true -> null
+                root.boolean("isLastPage") == true -> {
+                    log.i("isLastPage is true.")
+                    null
+                }
                 else -> startAt + items.size
             }
         }
