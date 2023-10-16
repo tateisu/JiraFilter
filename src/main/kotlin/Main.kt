@@ -14,7 +14,6 @@ import util.atZone
 import util.decodeJsonObject
 import util.encodeQuery
 import util.formatTime2
-import util.notEmpty
 import util.notZero
 import util.parseIso8601
 import util.toTsvLine
@@ -135,7 +134,7 @@ class Ticket(
     val key: String,
     val otherCols: Array<String?>,
 ) : Comparable<Ticket> {
-    val line = listOf(time.formatTime2(), key, *otherCols).toTsvLine()
+    private val line = listOf(time.formatTime2(), key, *otherCols).toTsvLine()
 
     override fun toString() = line
     override fun compareTo(other: Ticket) =
@@ -144,11 +143,9 @@ class Ticket(
             .notZero() ?: line.compareTo(other.line)
 }
 
-/**
- * Jiraのチケットを作成日降順で一定数読み、適当な条件でフィルタして表示する
- */
-suspend fun HttpClient.listTickets() {
-
+class TicketsLister(
+    val client: HttpClient,
+) {
     // apiTokenの取得方法:
     //        Jiraの右上のアカウント画像をタップ
     //        「アカウントを管理」をタップ
@@ -160,23 +157,34 @@ suspend fun HttpClient.listTickets() {
     //        新しいAPIトークンがHidden表示されるので、コピーする
 
     // secrets ファイルを読む
-    val secrets = File(optSecrets).readText().decodeJsonObject()
-    val user = secrets.string("user") ?: error("missing user in $optSecrets")
-    val apiToken = secrets.string("apiToken") ?: error("missing apiToken in $optSecrets")
-
-    // user:apiToken から Basic認証用のBase64ダイジェストを計算する
-    secrets["basicAuth"] = "$user:$apiToken"
-        .encodeToByteArray()
-        .encodeBase64()
+    private val secrets = File(optSecrets).readText().decodeJsonObject()
+    private val user = secrets.string("user") ?: error("missing user in $optSecrets")
+    private val apiToken = secrets.string("apiToken") ?: error("missing apiToken in $optSecrets")
 
     // 指定日数前の日時
-    val limitTime = ZonedDateTime.now(zoneTokyo)
+    private val limitTime = ZonedDateTime.now(zoneTokyo)
         .truncatedTo(ChronoUnit.DAYS)
         .minusDays(optDays.toLong())
 
-    println("limitTime=${limitTime.formatTime2()}")
+    // 取得結果
+    private val tickets = HashMap<String, Ticket>()
 
-    fun filterAndFormatIssue(item: JsonObject): Pair<ZonedDateTime, Ticket?> {
+    init {
+        // user:apiToken から Basic認証用のBase64ダイジェストを計算する
+        secrets["basicAuth"] = "$user:$apiToken"
+            .encodeToByteArray()
+            .encodeBase64()
+    }
+
+    private fun addTickets(srcList: Iterable<Ticket?>) {
+        for (ticket in srcList) {
+            ticket ?: continue
+            if (tickets.containsKey(ticket.key)) continue
+            tickets[ticket.key] = ticket
+        }
+    }
+
+    private fun filterAndFormatIssue(item: JsonObject): Pair<ZonedDateTime, Ticket?> {
 
         val fields = item.jsonObject("fields")
             ?: error("missing fields")
@@ -232,7 +240,7 @@ suspend fun HttpClient.listTickets() {
         return Pair(time, line)
     }
 
-    suspend fun loadMultiplePage(
+    private suspend fun loadMultiplePage(
         jql: String,
     ): List<Ticket> {
         log.i("loadMultiplePage: $jql")
@@ -244,7 +252,7 @@ suspend fun HttpClient.listTickets() {
 
         requestLoop@ while (startAt != null) {
 
-            val root = apiRequest(
+            val root = client.apiRequest(
                 secrets = secrets,
                 path = "/rest/api/3/search",
                 query = listOf(
@@ -274,7 +282,7 @@ suspend fun HttpClient.listTickets() {
                 log.i("items size=${a.size} tMin=$timeMin tMax=$timeMax")
                 result.addAll(a)
 
-                if(a.any { it.time < limitTime } ){
+                if (a.any { it.time < limitTime }) {
                     log.i("old limit exceeded.")
                     break
                 }
@@ -285,6 +293,7 @@ suspend fun HttpClient.listTickets() {
                     log.i("isLastPage is true.")
                     null
                 }
+
                 else -> startAt + items.size
             }
         }
@@ -292,61 +301,71 @@ suspend fun HttpClient.listTickets() {
         return result
     }
 
-    suspend fun loadSubtask(parent: String): List<Ticket> {
+    private suspend fun loadSubtask(parent: String): Int {
         print("loadSubtask $parent ")
-        val jsonRoot = apiRequest(
+        val jsonRoot = client.apiRequest(
             secrets = secrets,
             path = "/rest/api/latest/issue/$parent"
         ).decodeJsonObject()
-        return jsonRoot
+
+        val subtasks = jsonRoot
             .jsonObject("fields")
             ?.jsonArray("subtasks")
             ?.objectList()
-            ?.also {
-                print("${it.size},")
-            }
-            ?.mapNotNull {
-                print(".")
-                val item = apiRequest(
-                    secrets = secrets,
-                    path = "/rest/api/latest/issue/${it.string("id")}",
-                ).decodeJsonObject()
-                val (_, line) = filterAndFormatIssue(item)
-                line
-            }.also {
-                print("\n")
-            }
             ?: error("missing fields.subtasks in /rest/api/latest/issue/$parent")
+        val size = subtasks.size
+        println("size=${subtasks.size}")
+
+        for (subtask in subtasks) {
+            val id = subtask.string("id")
+            if (tickets.containsKey(id)) continue
+            val item = client.apiRequest(
+                secrets = secrets,
+                path = "/rest/api/latest/issue/${id}",
+            ).decodeJsonObject()
+            val (_, ticket) = filterAndFormatIssue(item)
+            addTickets(listOf(ticket))
+        }
+        return size
     }
 
-    // project in(...) でも  project=... or  project=... でも
-    // 複数プロジェクトを読めなかったので、プロジェクトごとに取得する
-    val listIssues = optProject.split(",")
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-        .map { project ->
-            loadMultiplePage(
+    /**
+     * Jiraのチケットを作成日降順で一定数読み、適当な条件でフィルタして表示する
+     */
+    suspend fun listTickets() {
+        println("limitTime=${limitTime.formatTime2()}")
+
+        // project in(...) でも  project=... or  project=... でも
+        // 複数プロジェクトを読めなかったので、プロジェクトごとに取得する
+        for (project in optProject.split(",")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        ) {
+            val list = loadMultiplePage(
                 jql = "project=${project.quoteJql()}",
             )
+            addTickets(list)
         }
-        .flatten()
 
-    val listSubtask = optSubtaskParents.split(",")
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-        .map { parent ->
-            loadSubtask(parent).notEmpty() ?: loadMultiplePage(
-                jql = "parent=${parent.quoteJql()}",
-            )
-        }.flatten()
+        for (parent in optSubtaskParents.split(",")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        ) {
+            val count = loadSubtask(parent)
+            if (count == 0) {
+                val list = loadMultiplePage(jql = "parent=${parent.quoteJql()}")
+                addTickets(list)
+            }
+        }
 
-    val list = (listIssues + listSubtask).sorted().distinctBy { it.key }
+        val list = (tickets.values).sorted()
 
-    if (list.isEmpty()) {
-        log.w("empty result.")
-    } else {
-        println("# updated, ticket#, status, role(creator, reporter, assignee), title")
-        list.forEach { println(it) }
+        if (list.isEmpty()) {
+            log.w("empty result.")
+        } else {
+            println("# updated, ticket#, status, role(creator, reporter, assignee), title")
+            list.forEach { println(it) }
+        }
     }
 }
 
@@ -388,6 +407,6 @@ suspend fun main(args: Array<String>) {
     HttpClient(CIO) {
         expectSuccess = true
     }.use { client ->
-        client.listTickets()
+        TicketsLister(client = client).listTickets()
     }
 }
